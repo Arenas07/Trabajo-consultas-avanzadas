@@ -1,15 +1,29 @@
 USE pizzas_trabajo;
 
 /* Ejercicios de **Procedimientos Almacenados** */
-SELECT * FROM presentacion;
+
+/* 1. **`ps_add_pizza_con_ingredientes`**
+   Crea un procedimiento que inserte una nueva pizza en la tabla `pizza` junto con sus ingredientes en `pizza_ingrediente`.
+
+   - Parámetros de entrada: `p_nombre_pizza`, `p_precio`, lista de `p_ids_ingredientes`.
+   - Debe recorrer la lista de ingredientes (cursor o ciclo) y hacer los inserts correspondients.
+*/
+
 DELIMITER //
 
 DROP PROCEDURE IF EXISTS ps_add_pizza_con_ingredientes;
-CREATE PROCEDURE ps_add_pizza_con_ingredientes(IN p_presentacion_producto INT, IN p_tipo_producto VARCHAR, IN p_nombre_pizza VARCHAR, IN p_precio DECIMAL(10,2), IN p_ids_ingredientes INT)
+CREATE PROCEDURE ps_add_pizza_con_ingredientes(IN p_presentacion_producto INT, IN p_tipo_producto VARCHAR(50), IN p_nombre_pizza VARCHAR(100), IN p_precio DECIMAL(10,2), IN p_ids_ingredientes INT)
 BEGIN
 
     DECLARE _tipo_producto_id INT;
     DECLARE _producto_id INT;
+    DECLARE _ingrediente_id INT;
+    DECLARE fin INT DEFAULT 0;
+
+    DECLARE cur CURSOR FOR
+        SELECT id FROM ingrediente WHERE id IN (p_ids_ingredientes);
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET fin = 1;
+
 
     INSERT INTO tipo_producto(
         nombre
@@ -21,24 +35,112 @@ BEGIN
         tipo_producto_id
     ) VALUES (
         p_nombre_pizza, _tipo_producto_id
-    )
+    );
 
     SET _producto_id = LAST_INSERT_ID();
 
     INSERT INTO producto_presentacion(
         producto_id,
-        presentacion_id
+        presentacion_id,
         precio
     ) VALUES(
         _producto_id, 
         p_presentacion_producto,
         p_precio
-    )
+    );
 
+    OPEN cur;
 
-END;
+    read_loop: LOOP
+        FETCH cur INTO _ingrediente_id;
+
+        IF fin THEN
+            LEAVE read_loop;
+        END IF;
+
+        INSERT INTO ingredientes_extra(detalle_id, ingrediente_id, cantidad)
+        VALUES (1, _ingrediente_id, 1);
+
+    END LOOP;
+    CLOSE cur;
+        
+END //
 
 DELIMITER //
+
+CALL ps_add_pizza_con_ingredientes(1, 'Pizza', 'Pizza adrian esto no sirve', 15000.00, '2');
+-- Debido al modelo de la base de datos no se puede insertar directamente un ingrediente a una pizza
+-- Cada pizza esta enlazada a un pedido y un pedido a un cliente osea no podemos crear pizzas e ingredientes a la vez sin un cliente
+-- lo cual en un modelo logico esta mal
+
+/* 2. **`ps_actualizar_precio_pizza`**
+   Procedimiento que reciba `p_pizza_id` y `p_nuevo_precio` y actualice el precio.
+
+   - Antes de actualizar, valide con un `IF` que el nuevo precio sea mayor que 0; de lo contrario, lance un `SIGNAL`.
+*/
+
+DELIMITER //
+
+DROP PROCEDURE IF EXISTS ps_actualizar_precio_pizza;
+CREATE PROCEDURE ps_actualizar_precio_pizza(IN p_pizza_id INT, IN p_nuevo_precio DECIMAL(10,2))
+BEGIN 
+    DECLARE _nuevo_precio DECIMAL(10,2);
+    DECLARE _pro_presentacion_id INT;
+    DECLARE _columnas_afectadas INT;
+    DECLARE fin INT DEFAULT FALSE;
+    
+    DECLARE cur_pro CURSOR FOR
+        SELECT presentacion_id FROM producto_presentacion WHERE producto_id = p_pizza_id AND presentacion_id <> 1;
+    
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET fin = 1;
+
+    UPDATE producto_presentacion
+    SET precio = p_nuevo_precio
+    WHERE producto_id = p_pizza_id AND presentacion_id = 1;
+
+    IF ROW_COUNT() <= 0 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'No se encontro la presentacion de la pipsha';
+
+    
+    ELSE
+        SET _nuevo_precio = p_nuevo_precio;
+        OPEN cur_pro;
+
+        leerloop: LOOP
+            FETCH cur_pro INTO _pro_presentacion_id;
+            
+            IF fin THEN
+                LEAVE leerloop;
+            END IF;
+
+            SET _nuevo_precio = _nuevo_precio + (_nuevo_precio * 0.30);
+
+            UPDATE producto_presentacion
+            SET precio = _nuevo_precio
+            WHERE producto_id  = p_pizza_id AND presentacion_id = _pro_presentacion_id;
+
+            IF ROW_COUNT() > 0 THEN
+                SET _columnas_afectadas = _columnas_afectadas + 1;
+            END IF;
+
+        END LOOP leerloop;
+        CLOSE cur_pro;
+
+        IF _columnas_afectadas <= 0 THEN
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'No se actualizo el precio de las otras presentaciones del producto';
+        END IF;
+
+    END IF;
+
+END //
+
+DELIMITER //
+
+CALL ps_actualizar_precio_pizza(1, 7000.00)
+
+
 
 
 /* Funciones */
