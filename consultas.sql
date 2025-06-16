@@ -1,5 +1,44 @@
 USE pizzas_trabajo;
 
+/* Ejercicios de **Procedimientos Almacenados** */
+SELECT * FROM presentacion;
+DELIMITER //
+
+DROP PROCEDURE IF EXISTS ps_add_pizza_con_ingredientes;
+CREATE PROCEDURE ps_add_pizza_con_ingredientes(IN p_presentacion_producto INT, IN p_tipo_producto VARCHAR, IN p_nombre_pizza VARCHAR, IN p_precio DECIMAL(10,2), IN p_ids_ingredientes INT)
+BEGIN
+
+    DECLARE _tipo_producto_id INT;
+    DECLARE _producto_id INT;
+
+    INSERT INTO tipo_producto(
+        nombre
+    ) VALUES (p_tipo_producto);
+    SET _tipo_producto_id = LAST_INSERT_ID();
+    
+    INSERT INTO producto(
+        nombre,
+        tipo_producto_id
+    ) VALUES (
+        p_nombre_pizza, _tipo_producto_id
+    )
+
+    SET _producto_id = LAST_INSERT_ID();
+
+    INSERT INTO producto_presentacion(
+        producto_id,
+        presentacion_id
+        precio
+    ) VALUES(
+        _producto_id, 
+        p_presentacion_producto,
+        p_precio
+    )
+
+
+END;
+
+DELIMITER //
 
 
 /* Funciones */
