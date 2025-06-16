@@ -336,3 +336,106 @@ DELIMITER //
 
 
 SELECT fc_obtener_stock_ingrediente(1) AS Disponible;
+
+##  Ejercicios de **Triggers** 
+
+/*  **`tg_before_insert_detalle_pedido`**
+   - `BEFORE INSERT` en `detalle_pedido`
+   - Valida que la cantidad sea ≥ 1; si no, `SIGNAL` de error.
+*/
+
+DELIMITER //
+DROP TRIGGER IF EXISTS tg_before_insert_detalle_pedido;
+CREATE TRIGGER tg_before_insert_detalle_pedido BEFORE INSERT ON detalle_pedido
+FOR EACH ROW
+BEGIN
+    IF NEW.cantidad < 1 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'La cantidad debe ser mayor a 1';
+    END IF;
+END //
+
+/*  **`tg_after_insert_detalle_pedido_pizza`**
+   - `AFTER INSERT` en `detalle_pedido_pizza`
+   - Disminuye el `stock` correspondiente en `ingrediente` según la receta de la pizza.
+*/
+
+DELIMITER //
+
+CREATE TRIGGER tg_after_insert_detalle_pedido_pizza
+AFTER INSERT ON detalle_pedido_producto
+FOR EACH ROW
+BEGIN
+  DECLARE done INT DEFAULT FALSE;
+  DECLARE _ingrediente_id INT;
+  DECLARE _cantidad INT;
+
+  DECLARE cur CURSOR FOR
+    SELECT ingrediente_id, cantidad
+    FROM ingredientes_extra
+    WHERE detalle_id = NEW.detalle_id;
+
+  DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+  OPEN cur;
+
+  read_loop: LOOP
+    FETCH cur INTO _ingrediente_id, _cantidad;
+    IF done THEN
+      LEAVE read_loop;
+    END IF;
+
+    UPDATE ingrediente
+    SET stock = stock - _cantidad
+    WHERE id = _ingrediente_id;
+  END LOOP;
+
+  CLOSE cur;
+END //
+
+DELIMITER ;
+
+/* 3. **`tg_after_update_pizza_precio`**
+   - `AFTER UPDATE` en `pizza`
+   - Inserta en una tabla `auditoria_precios` la pizza_id, precio antiguo y nuevo, y timestamp.
+*/
+DELIMITER //
+
+DROP TRIGGER IF EXISTS tg_after_update_pizza_precio;
+CREATE TRIGGER tg_after_update_pizza_precio
+AFTER UPDATE ON producto_presentacion
+FOR EACH ROW
+BEGIN
+    IF OLD.precio <> NEW.precio THEN
+        INSERT INTO auditoria_precios (
+            producto_id,
+            presentacion_id,
+            precio_anterior,
+            precio_nuevo
+        )
+        VALUES (
+            NEW.producto_id,
+            NEW.presentacion_id,
+            OLD.precio,
+            NEW.precio
+        );
+    END IF;
+END;
+//
+
+DELIMITER ;
+
+CALL ps_actualizar_precio_pizza(1, 7000.00);
+
+SELECT * FROM auditoria_precios;
+CREATE TABLE auditoria_precios (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    producto_id INT UNSIGNED NOT NULL,
+    presentacion_id INT UNSIGNED NOT NULL,
+    precio_anterior DECIMAL(10,2) NOT NULL,
+    precio_nuevo DECIMAL(10,2) NOT NULL,
+    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (producto_id) REFERENCES producto(id),
+    FOREIGN KEY (presentacion_id) REFERENCES presentacion(id)
+);
+DROP TABLE IF EXISTS auditoria_precios;
