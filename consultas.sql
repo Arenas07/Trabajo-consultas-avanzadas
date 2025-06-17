@@ -141,6 +141,65 @@ DELIMITER //
 CALL ps_actualizar_precio_pizza(1, 7000.00)
 
 
+/* **`ps_cancelar_pedido`**
+   Recibe `p_pedido_id` y:
+
+   - Marca el pedido como “cancelado” (p. ej. actualiza un campo `estado`),
+   - Elimina todas sus líneas de detalle (`DELETE FROM detalle_pedido WHERE pedido_id = …`).
+   - Devuelve el número de líneas eliminadas.
+   */
+
+ALTER TABLE pedido ADD COLUMN estado_pedido VARCHAR(20) DEFAULT 'activo';
+
+ALTER TABLE detalle_pedido_producto
+DROP FOREIGN KEY detalle_pedido_producto_ibfk_1;
+
+ALTER TABLE detalle_pedido_producto
+ADD CONSTRAINT fk_dp_producto_detalle
+FOREIGN KEY (detalle_id) REFERENCES detalle_pedido(id)
+ON DELETE CASCADE;
+
+ALTER TABLE detalle_pedido_combo
+DROP FOREIGN KEY detalle_pedido_combo_ibfk_1;
+
+ALTER TABLE detalle_pedido_combo
+ADD CONSTRAINT fk_dp_combo_detalle
+FOREIGN KEY (detalle_id) REFERENCES detalle_pedido(id)
+ON DELETE CASCADE;
+
+ALTER TABLE ingredientes_extra
+DROP FOREIGN KEY ingredientes_extra_ibfk_1;
+
+ALTER TABLE ingredientes_extra
+ADD CONSTRAINT fk_dp_ingrediente_detalle
+FOREIGN KEY (detalle_id) REFERENCES detalle_pedido(id)
+ON DELETE CASCADE;
+
+
+DELIMITER //
+
+DROP PROCEDURE IF EXISTS ps_cancelar_pedido;
+
+CREATE PROCEDURE ps_cancelar_pedido(IN p_pedido_id INT)
+BEGIN
+    DECLARE _lineas_eliminadas INT DEFAULT 0;
+
+    UPDATE pedido
+    SET estado = 'cancelado'
+    WHERE id = p_pedido_id;
+
+    DELETE FROM detalle_pedido
+    WHERE pedido_id = p_pedido_id;
+
+    SET _lineas_eliminadas = ROW_COUNT();
+
+    SELECT _lineas_eliminadas AS lineas_eliminadas;
+END //
+
+DELIMITER ;
+
+CALL ps_cancelar_pedido(1);
+
 
 
 /* Funciones */
@@ -366,7 +425,7 @@ CREATE TRIGGER tg_after_insert_detalle_pedido_pizza
 AFTER INSERT ON detalle_pedido_producto
 FOR EACH ROW
 BEGIN
-  DECLARE done INT DEFAULT FALSE;
+  DECLARE fin INT DEFAULT 0;
   DECLARE _ingrediente_id INT;
   DECLARE _cantidad INT;
 
@@ -375,13 +434,13 @@ BEGIN
     FROM ingredientes_extra
     WHERE detalle_id = NEW.detalle_id;
 
-  DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+  DECLARE CONTINUE HANDLER FOR NOT FOUND SET fin = 1;
 
   OPEN cur;
 
   read_loop: LOOP
     FETCH cur INTO _ingrediente_id, _cantidad;
-    IF done THEN
+    IF fin THEN
       LEAVE read_loop;
     END IF;
 
@@ -439,3 +498,100 @@ CREATE TABLE auditoria_precios (
     FOREIGN KEY (presentacion_id) REFERENCES presentacion(id)
 );
 DROP TABLE IF EXISTS auditoria_precios;
+
+/* 4. **`tg_before_delete_pizza`**
+   - `BEFORE DELETE` en `pizza`
+   - Impide borrar si la pizza aparece en algún `detalle_pedido_pizza` (lanza `SIGNAL`).
+
+*/
+
+USE pizzas_trabajo;
+DELIMITER //
+
+DROP TRIGGER IF EXISTS tg_before_delete_pizza;
+
+CREATE TRIGGER tg_before_delete_pizza
+BEFORE DELETE ON producto
+FOR EACH ROW
+BEGIN
+
+    DECLARE _detalle_existe INT DEFAULT 0;
+
+    SELECT COUNT(*) INTO _detalle_existe
+    FROM detalle_pedido_producto
+    WHERE producto_id = OLD.id;
+
+    IF _detalle_existe > 0 THEN
+        SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'No se puede eliminar';
+    END IF;
+
+END //
+
+DELIMITER ;
+
+
+/* 5. **`tg_after_insert_factura`**
+   - `AFTER INSERT` en `factura`
+   - Actualiza el pedido asociado marcándolo como “facturado”.
+*/
+
+ALTER TABLE pedido ADD estado VARCHAR(20) DEFAULT 'pendiente';
+
+-- Profesor por favor.. que es esa base de datos
+
+DELIMITER //
+
+DROP TRIGGER IF EXISTS tg_after_insert_factura;
+
+CREATE TRIGGER tg_after_insert_factura
+AFTER INSERT ON factura
+FOR EACH ROW
+BEGIN
+    UPDATE pedido
+    SET estado = 'facturado'
+    WHERE id = NEW.pedido_id;
+END //
+
+DELIMITER ;
+
+INSERT INTO factura(total, fecha, pedido_id, cliente_id) VALUES
+(35000, '2025-06-10 12:05:00', 1, 1)
+
+SELECT * FROM pedido;
+
+/* **`tg_after_update_ingrediente_stock`**
+   - `AFTER UPDATE` en `ingrediente`
+   - Si el stock cae por debajo de 10 unidades, inserta una alerta en `notificacion_stock_bajo`.
+*/
+
+USE pizzas_trabajo;
+DROP TABLE IF EXISTS notificacion_stock_bajo;
+
+CREATE TABLE notificacion_stock_bajo (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    ingrediente_id INT UNSIGNED NOT NULL,
+    mensaje TEXT NOT NULL,
+    FOREIGN KEY (ingrediente_id) REFERENCES ingrediente(id)
+);
+DELIMITER //
+
+DROP TRIGGER IF EXISTS tg_after_update_ingrediente_stock;
+
+CREATE TRIGGER tg_after_update_ingrediente_stock
+AFTER UPDATE ON ingrediente
+FOR EACH ROW
+BEGIN
+    IF NEW.stock < 10 THEN
+        INSERT INTO notificacion_stock_bajo (
+            ingrediente_id, 
+            mensaje
+        )
+        VALUES (
+            NEW.id,
+            'Stock bajo para ese ingrediente'
+        );
+    END IF;
+END //
+
+DELIMITER ;
